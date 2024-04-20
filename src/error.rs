@@ -8,7 +8,9 @@ pub enum VncError {
     #[error("No VNC encoding selected")]
     NoEncoding,
     #[error("Unknow VNC security type: {0}")]
-    InvalidSecurityTyep(u8),
+    InvalidSecurityType(u8),
+    #[error("Unknow VeNCrypt subtype: {0}")]
+    InvalidVeNCSubtype(u32),
     #[error("Wrong password")]
     WrongPassword,
     #[error("Connect error with unknown reason")]
@@ -25,6 +27,8 @@ pub enum VncError {
     IoError(#[from] std::io::Error),
     #[error("VNC Error with message: {0}")]
     General(String),
+    #[error("Unsupported VeNCrypt version")]
+    UnsupportedVeNCryptVersion,
 }
 
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for VncError {

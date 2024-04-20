@@ -1,6 +1,10 @@
+use std::sync::Arc;
+
 use super::security;
 use crate::{VncError, VncVersion};
+use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_rustls::{client::TlsStream, rustls::{ClientConfig, RootCertStore}, TlsConnector};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,16 +22,32 @@ pub(super) enum SecurityType {
     GtkVncSasl = 20,
     Md5Hash = 21,
     ColinDeanXvp = 22,
+    RSAAES256 = 129
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub(super) enum VeNCryptSecurityType {
+    Plain = 256,
+    TLSNone,
+    TLSVnc,
+    TLSPlain,
+    X509None,
+    X509Vnc,
+    X509Plain,
+    TLSSASL,
+    X509SASL,
 }
 
 impl TryFrom<u8> for SecurityType {
     type Error = VncError;
     fn try_from(num: u8) -> Result<Self, Self::Error> {
         match num {
-            0 | 1 | 2 | 5 | 6 | 16 | 17 | 18 | 19 | 20 | 21 | 22 => {
+            0 | 1 | 2 | 5 | 6 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 129 => {
                 Ok(unsafe { std::mem::transmute(num) })
             }
-            invalid => Err(VncError::InvalidSecurityTyep(invalid)),
+            invalid => Err(VncError::InvalidSecurityType(invalid)),
         }
     }
 }
@@ -35,6 +55,22 @@ impl TryFrom<u8> for SecurityType {
 impl From<SecurityType> for u8 {
     fn from(e: SecurityType) -> Self {
         e as u8
+    }
+}
+
+impl TryFrom<u32> for VeNCryptSecurityType {
+    type Error = VncError;
+    fn try_from(num: u32) -> Result<Self, Self::Error> {
+        match num {
+            256..=264 => Ok(unsafe { std::mem::transmute(num) }),
+            invalid => Err(VncError::InvalidVeNCSubtype(invalid)),
+        }
+    }
+}
+
+impl From<VeNCryptSecurityType> for u32 {
+    fn from(e: VeNCryptSecurityType) -> Self {
+        e as u32
     }
 }
 
@@ -95,6 +131,7 @@ impl SecurityType {
 pub(super) enum AuthResult {
     Ok = 0,
     Failed = 1,
+    TooMany = 2,
 }
 
 impl From<u32> for AuthResult {
@@ -154,6 +191,95 @@ impl AuthHelper {
         S: AsyncRead + AsyncWrite + Unpin,
     {
         let result = reader.read_u32().await?;
+        Ok(result.into())
+    }
+}
+
+pub(super) struct VeNCAuthHelper<S>
+where
+S: AsyncRead + AsyncWrite + Unpin,
+{
+    version: [u8; 2],
+    subtype: VeNCryptSecurityType,
+    pub tls_stream: Option<TlsStream<S>>
+}
+
+impl<S> VeNCAuthHelper<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    pub(super) async fn new(stream: &mut S) -> Result<Self, VncError>
+
+    {
+        let mut version:[u8; 2] = [0; 2];
+        stream.read_exact(&mut version).await?;
+        if (version[0], version[1]) != (0, 2) {
+            return Err(VncError::UnsupportedVeNCryptVersion);
+        }
+
+        stream.write_all(&[0, 2]).await?;
+
+        let response = stream.read_u8().await?;
+
+        if response != 0 {
+            return Err(VncError::UnsupportedVeNCryptVersion);
+        }
+
+        let subtypelen = stream.read_u8().await?;
+        let mut subtypes: Vec<VeNCryptSecurityType> = Vec::new();
+        for _ in 0..subtypelen {
+            let subtype = stream.read_u32().await?.try_into()?;
+            subtypes.push(subtype);
+        }
+
+        if !subtypes.contains(&VeNCryptSecurityType::X509Plain) {
+            return Err(VncError::UnsupportedVeNCryptVersion);
+        }
+
+        stream.write_u32(VeNCryptSecurityType::X509Plain.into()).await?;
+        
+        let response = stream.read_u8().await?;
+        if response != 1 {
+            return Err(VncError::UnsupportedVeNCryptVersion);
+        }
+
+        Ok(Self{version, subtype: VeNCryptSecurityType::X509Plain, tls_stream: None})
+    }
+
+    pub(super) async fn tls_handshake(& mut self, stream: S, host: String) -> Result<(), VncError> 
+    {
+        assert!(self.subtype == VeNCryptSecurityType::X509Plain && self.version == [0, 2]);
+        
+        let root_store = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+        };
+
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        
+        let connector = TlsConnector::from(Arc::new(config));
+        let tls_stream = connector.connect(ServerName::try_from(host).unwrap(), stream).await;
+
+        if let Ok(tlstream) = tls_stream {
+            self.tls_stream = Some(tlstream);
+        } else {
+            return Err(VncError::ConnectError);
+        }
+        
+
+        Ok(())
+    } 
+
+    pub(super) async fn finish(&mut self, username: &str, password: &str) -> Result<AuthResult, VncError>
+    {
+        self.tls_stream.as_mut().unwrap().write_u32(username.len() as u32).await?;
+        self.tls_stream.as_mut().unwrap().write_u32(password.len() as u32).await?;
+        self.tls_stream.as_mut().unwrap().write_all(username.as_bytes()).await?;        
+        self.tls_stream.as_mut().unwrap().write_all(password.as_bytes()).await?;
+
+        let result = self.tls_stream.as_mut().unwrap().read_u32().await?;
+        
         Ok(result.into())
     }
 }

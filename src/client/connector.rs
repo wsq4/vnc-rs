@@ -7,12 +7,12 @@ use std::pin::Pin;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tracing::{info, trace};
 
-use crate::{PixelFormat, VncEncoding, VncError, VncVersion};
+use crate::{client::auth::VeNCAuthHelper, PixelFormat, VncEncoding, VncError, VncVersion};
 
 pub enum VncState<S, F>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-    F: Future<Output = Result<String, VncError>> + Send + Sync + 'static,
+    F: Future<Output = Result<Vec<String>, VncError>> + Send + Sync + 'static,
 {
     Handshake(VncConnector<S, F>),
     Authenticate(VncConnector<S, F>),
@@ -22,7 +22,7 @@ where
 impl<S, F> VncState<S, F>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-    F: Future<Output = Result<String, VncError>> + Send + Sync + 'static,
+    F: Future<Output = Result<Vec<String>, VncError>> + Send + Sync + 'static,
 {
     pub fn try_start(
         self,
@@ -98,36 +98,62 @@ where
                                 // giving the reason, as described in Section 7.1.2.
                                 SecurityType::write(&SecurityType::VncAuth, &mut connector.stream)
                                     .await?;
+
+                                // get password
+                                if connector.auth_methond.is_none() {
+                                    return Err(VncError::NoPassword);
+                                }
+
+                                let credential = (connector.auth_methond.take().unwrap()).await?;
+
+                                // auth
+                                let auth = AuthHelper::read(&mut connector.stream, credential.first().unwrap()).await?;
+                                auth.write(&mut connector.stream).await?;
+                                let result = auth.finish(&mut connector.stream).await?;
+                                if let AuthResult::Failed = result {
+                                    if let VncVersion::RFB37 = connector.rfb_version {
+                                        // In VNC Authentication (Section 7.2.2), if the authentication fails,
+                                        // the server sends the SecurityResult message, but does not send an
+                                        // error message before closing the connection.
+                                        return Err(VncError::WrongPassword);
+                                    } else {
+                                        let _ = connector.stream.read_u32().await?;
+                                        let mut err_msg = String::new();
+                                        connector.stream.read_to_string(&mut err_msg).await?;
+                                        return Err(VncError::General(err_msg));
+                                    }
+                                }
                             }
+                        } else if security_types.contains(&SecurityType::VeNCrypt) && connector.rfb_version == VncVersion::RFB38 {
+                            SecurityType::write(&SecurityType::VeNCrypt, &mut connector.stream).await?;
+                            
+                            let mut auth = VeNCAuthHelper::new(&mut connector.stream).await?;
+                            auth.tls_handshake(connector.stream, connector.sni_name.unwrap_or("localhost".to_string())).await?;
+
+                            let credential = (connector.auth_methond.take().unwrap()).await?;
+
+                            auth.finish(&credential[0], &credential[1]).await?;
+
+                            trace!("VeNCrypt auth done");
+
+                            return Ok(
+                                VncState::Connected(
+                                    VncClient::new(
+                                        auth.tls_stream.unwrap(),
+                                        connector.allow_shared,
+                                        connector.pixel_format,
+                                        connector.encodings,
+                                    )
+                                    .await?,
+                                )
+                            );
+
                         } else {
                             let msg = "Security type apart from Vnc Auth has not been implemented";
                             return Err(VncError::General(msg.to_owned()));
                         }
 
-                        // get password
-                        if connector.auth_methond.is_none() {
-                            return Err(VncError::NoPassword);
-                        }
-
-                        let credential = (connector.auth_methond.take().unwrap()).await?;
-
-                        // auth
-                        let auth = AuthHelper::read(&mut connector.stream, &credential).await?;
-                        auth.write(&mut connector.stream).await?;
-                        let result = auth.finish(&mut connector.stream).await?;
-                        if let AuthResult::Failed = result {
-                            if let VncVersion::RFB37 = connector.rfb_version {
-                                // In VNC Authentication (Section 7.2.2), if the authentication fails,
-                                // the server sends the SecurityResult message, but does not send an
-                                // error message before closing the connection.
-                                return Err(VncError::WrongPassword);
-                            } else {
-                                let _ = connector.stream.read_u32().await?;
-                                let mut err_msg = String::new();
-                                connector.stream.read_to_string(&mut err_msg).await?;
-                                return Err(VncError::General(err_msg));
-                            }
-                        }
+                        
                     }
                     info!("auth done, client connected");
 
@@ -159,7 +185,7 @@ where
 pub struct VncConnector<S, F>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    F: Future<Output = Result<String, VncError>> + Send + Sync + 'static,
+    F: Future<Output = Result<Vec<String>, VncError>> + Send + Sync + 'static,
 {
     stream: S,
     auth_methond: Option<F>,
@@ -167,12 +193,13 @@ where
     allow_shared: bool,
     pixel_format: Option<PixelFormat>,
     encodings: Vec<VncEncoding>,
+    sni_name: Option<String>,
 }
 
 impl<S, F> VncConnector<S, F>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
-    F: Future<Output = Result<String, VncError>> + Send + Sync + 'static,
+    F: Future<Output = Result<Vec<String>, VncError>> + Send + Sync + 'static,
 {
     /// To new a vnc client configuration with stream `S`
     ///
@@ -209,6 +236,7 @@ where
             rfb_version: VncVersion::RFB38,
             pixel_format: None,
             encodings: Vec::new(),
+            sni_name: None,
         }
     }
 
@@ -305,6 +333,15 @@ where
     ///
     pub fn add_encoding(mut self, encoding: VncEncoding) -> Self {
         self.encodings.push(encoding);
+        self
+    }
+
+    /// TLS server sni name that we want to use
+    /// 
+    /// This is only used when the server supports VeNCrypt
+    /// 
+    pub fn set_sni_name(mut self, sni_name: String) -> Self {
+        self.sni_name = Some(sni_name);
         self
     }
 

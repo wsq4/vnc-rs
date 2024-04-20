@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use minifb::{Window, WindowOptions};
 use tokio::{self, net::TcpStream};
 use tracing::Level;
-use vnc::{PixelFormat, Rect, VncConnector, VncEvent, X11Event};
+use vnc::{PixelFormat, Rect, VncConnector, VncEvent, X11Event, ClientMouseEvent, ClientKeyEvent};
 
 struct CanvasUtils {
     window: Window,
@@ -143,13 +143,14 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let tcp = TcpStream::connect("127.0.0.1:5900").await?;
+    let tcp = TcpStream::connect("local.si-qi.wang:5905").await?;
     let vnc = VncConnector::new(tcp)
-        .set_auth_method(async move { Ok("123".to_string()) })
+        .set_auth_method(async move { Ok(vec!["wsq".to_string(), "1234".to_string()]) })
         .add_encoding(vnc::VncEncoding::Tight)
         .add_encoding(vnc::VncEncoding::Zrle)
         .add_encoding(vnc::VncEncoding::CopyRect)
         .add_encoding(vnc::VncEncoding::Raw)
+        .set_sni_name("local.si-qi.wang".to_string())
         .allow_shared(true)
         .set_pixel_format(PixelFormat::bgra())
         .build()?
@@ -160,6 +161,7 @@ async fn main() -> Result<()> {
     let mut canvas = CanvasUtils::new()?;
 
     let mut now = std::time::Instant::now();
+
     loop {
         match vnc.poll_event().await {
             Ok(Some(e)) => {
