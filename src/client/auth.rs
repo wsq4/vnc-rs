@@ -45,7 +45,7 @@ impl TryFrom<u8> for SecurityType {
     fn try_from(num: u8) -> Result<Self, Self::Error> {
         match num {
             0 | 1 | 2 | 5 | 6 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 129 => {
-                Ok(unsafe { std::mem::transmute(num) })
+                Ok(unsafe { std::mem::transmute::<u8, SecurityType>(num) })
             }
             invalid => Err(VncError::InvalidSecurityType(invalid)),
         }
@@ -237,7 +237,7 @@ where
         }
 
         stream.write_u32(VeNCryptSecurityType::X509Plain.into()).await?;
-        
+
         let response = stream.read_u8().await?;
         if response != 1 {
             return Err(VncError::UnsupportedVeNCryptVersion);
@@ -246,10 +246,10 @@ where
         Ok(Self{version, subtype: VeNCryptSecurityType::X509Plain, tls_stream: None})
     }
 
-    pub(super) async fn tls_handshake(& mut self, stream: S, host: String) -> Result<(), VncError> 
+    pub(super) async fn tls_handshake(& mut self, stream: S, host: String) -> Result<(), VncError>
     {
         assert!(self.subtype == VeNCryptSecurityType::X509Plain && self.version == [0, 2]);
-        
+
         let root_store = RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.into(),
         };
@@ -257,7 +257,7 @@ where
         let config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
-        
+
         let connector = TlsConnector::from(Arc::new(config));
         let tls_stream = connector.connect(ServerName::try_from(host).unwrap(), stream).await;
 
@@ -266,20 +266,20 @@ where
         } else {
             return Err(VncError::ConnectError);
         }
-        
+
 
         Ok(())
-    } 
+    }
 
     pub(super) async fn finish(&mut self, username: &str, password: &str) -> Result<AuthResult, VncError>
     {
         self.tls_stream.as_mut().unwrap().write_u32(username.len() as u32).await?;
         self.tls_stream.as_mut().unwrap().write_u32(password.len() as u32).await?;
-        self.tls_stream.as_mut().unwrap().write_all(username.as_bytes()).await?;        
+        self.tls_stream.as_mut().unwrap().write_all(username.as_bytes()).await?;
         self.tls_stream.as_mut().unwrap().write_all(password.as_bytes()).await?;
 
         let result = self.tls_stream.as_mut().unwrap().read_u32().await?;
-        
+
         Ok(result.into())
     }
 }
