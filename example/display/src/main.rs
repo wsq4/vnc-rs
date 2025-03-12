@@ -1,8 +1,15 @@
+use std::fs;
+use std::io::{BufReader, Read};
 use anyhow::{Context, Result};
 use minifb::{Window, WindowOptions};
+use rustls_pki_types::{CertificateDer, TrustAnchor};
+use rustls_pki_types::pem::PemObject;
 use tokio::{self, net::TcpStream};
+use tokio::io::AsyncReadExt;
 use tracing::Level;
+use webpki::DerTypeId::Certificate;
 use vnc::{PixelFormat, Rect, VncConnector, VncEvent, X11Event, ClientMouseEvent, ClientKeyEvent};
+use webpki::{anchor_from_trusted_cert, EndEntityCert};
 
 struct CanvasUtils {
     window: Window,
@@ -143,14 +150,47 @@ async fn main() -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let tcp = TcpStream::connect("local.si-qi.wang:5905").await?;
+    let tcp = TcpStream::connect("192.168.200.160:5900").await?;
+
+    let pem_string = "-----BEGIN CERTIFICATE-----
+MIIDVzCCAj+gAwIBAgIUOqPSfcoY0ZbPb2fgTFk6gFIyQe8wDQYJKoZIhvcNAQEL
+BQAwVDELMAkGA1UEBhMCQ04xEDAOBgNVBAgMB0ppYW5nc3UxEDAOBgNVBAcMB05h
+bmppbmcxITAfBgNVBAoMGEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDAeFw0yNTAz
+MTExNDQ0MzJaFw0yNjAzMTExNDQ0MzJaMFQxCzAJBgNVBAYTAkNOMRAwDgYDVQQI
+DAdKaWFuZ3N1MRAwDgYDVQQHDAdOYW5qaW5nMSEwHwYDVQQKDBhJbnRlcm5ldCBX
+aWRnaXRzIFB0eSBMdGQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDC
+fItZUlqRq5Iz5C2HbpVVC+srQ35KRBKfpRmnZbCLuw21A84HK2GGhg+WWTVk5/R3
+mkbAQzhNjo9pBqzVzIb1YTEnKre7Z/HBXlh6XwZwSCpgwul6krKILS4erEK+kOkv
+v+MBrkgsbkfS80qGM3ijPVXUtBYv5rrcr2e5SrQtafqRHKLFWSrMv+0VoEQ5HKDb
+UHuOljWw0+NOCDQ5aVZsjzOWFDYT3rgAOvucPUiq4dEwA9wJm+ojAClC4O1ofYUa
+BDBj+LVZ4zIWf6QqAQQLLNlurqGUPQI7F6srWCRKSJIm6RwbpVOBHASTuhpRA+PZ
+WN4L6MorDkCnmoy8Kg1BAgMBAAGjITAfMB0GA1UdDgQWBBQSbmgnCOOzP10DFg35
+pa9nL2wyBzANBgkqhkiG9w0BAQsFAAOCAQEAI26VPxdbQ5ncSzVUIu18ZBuXWy2F
+Jt0/J3lm+mrfc5QGbAnbOHMR4q7NWEjReUu1DIU0DhibBW4zhYOsNQv3NSPKJkcB
+cgwE7rxwLAMM9PwXs3WlXVpBXnxju7QR3iBMYinsZzsIuXDKeyOnCicUOGf431GQ
+mkEHSN6k0WJF9IXUNqI6tDIhW4Cps1a04KpxXiSu7KdBNle6QHJaE25WuNKEYywy
+JNqNmjbWeA5+v50Vkh2JA8H2xKH3vqbO9wt5Y8T99zc7RyUt6UfToU71d97GglG9
+EtUYbAPGtuVelmg1bYnf3KOXtJNEza67e/gVLxjDXAukIyJLXWD4x+TdkA==
+-----END CERTIFICATE-----";
+
+    let pem = pem::parse(pem_string)?;
+
+    // Convert the certificate bytes to DER format
+    let der_bytes = pem.contents();
+
+    // Create a CertificateDer object from the DER bytes
+    let cert_der = CertificateDer::from(der_bytes);
+
     let vnc = VncConnector::new(tcp)
-        .set_auth_method(async move { Ok(vec!["wsq".to_string(), "1234".to_string()]) })
+        .set_auth_method(async move { Ok(vec!["root".to_string(), "1234".to_string()]) })
         .add_encoding(vnc::VncEncoding::Tight)
         .add_encoding(vnc::VncEncoding::Zrle)
         .add_encoding(vnc::VncEncoding::CopyRect)
         .add_encoding(vnc::VncEncoding::Raw)
-        .set_sni_name("local.si-qi.wang".to_string())
+        .add_root_store(
+            cert_der
+        )
+        .set_sni_name("192.168.200.160".to_string())
         .allow_shared(true)
         .set_pixel_format(PixelFormat::bgra())
         .build()?
