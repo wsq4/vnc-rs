@@ -1,10 +1,14 @@
+use std::error::Error;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use super::security;
 use crate::{VncError, VncVersion};
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{ServerName, TrustAnchor};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_rustls::{client::TlsStream, rustls::{ClientConfig, RootCertStore}, TlsConnector};
+
+mod sni;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,17 +250,22 @@ where
         Ok(Self{version, subtype: VeNCryptSecurityType::X509Plain, tls_stream: None})
     }
 
-    pub(super) async fn tls_handshake(& mut self, stream: S, host: String) -> Result<(), VncError>
+    pub(super) async fn tls_handshake(& mut self, stream: S, host: String, custom_store : RootCertStore) -> Result<(), VncError>
     {
         assert!(self.subtype == VeNCryptSecurityType::X509Plain && self.version == [0, 2]);
 
-        let root_store = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
-        };
+        let mut roots = custom_store.clone();
 
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
+        roots.roots.extend_from_slice(webpki_roots::TLS_SERVER_ROOTS);
+
+        let inner = rustls::client::WebPkiServerVerifier::builder(Arc::new(roots.clone())).build().map_err(|err| VncError::TlsHandshakeError(format!("{}", err)))?;
+        let verifier = Arc::new(sni::NoServerNameVerification::new(inner));
+
+        let mut config = ClientConfig::builder()
+            .with_root_certificates(roots)
             .with_no_client_auth();
+
+        config.dangerous().set_certificate_verifier(verifier);
 
         let connector = TlsConnector::from(Arc::new(config));
         let tls_stream = connector.connect(ServerName::try_from(host).unwrap(), stream).await;
@@ -264,7 +273,7 @@ where
         if let Ok(tlstream) = tls_stream {
             self.tls_stream = Some(tlstream);
         } else {
-            return Err(VncError::ConnectError);
+            return Err(VncError::TlsHandshakeError(format!("{0}", tls_stream.err().unwrap())));
         }
 
 

@@ -1,5 +1,5 @@
 [package]
-name = "vnc-rs"
+name = "save"
 version = "0.1.0"
 edition = "2021"
 authors  = ["Jovi Hsu <jv.hsu@outlook.com>"]
@@ -14,7 +14,7 @@ keywords = ["vnc"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [[bin]]
-name = "vnc-rs"
+name = "save"
 
 [dependencies]
 vnc-rs = { path="../../" }
@@ -35,6 +35,8 @@ webpki-roots = "0.26.1"
 rustls-webpki = "0.103.0"
 rustls-pki-types = "1.11.0"
 pem = "3.0.5"
+pixman = "0.2.1"
+png = "0.17.16"
 
 
 [profile.release]

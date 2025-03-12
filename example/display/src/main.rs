@@ -35,6 +35,7 @@ impl CanvasUtils {
     }
 
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
+        println!("Initializing window");
         let mut window = Window::new(
             "mstsc-rs Remote Desktop in Rust",
             width as usize,
@@ -53,7 +54,7 @@ impl CanvasUtils {
     fn draw(&mut self, rect: Rect, data: Vec<u8>) -> Result<()> {
         // since we set the PixelFormat as bgra
         // the pixels must be sent in [blue, green, red, alpha] in the network order
-
+        println!("Drawing");
         let mut s_idx = 0;
         for y in rect.y..rect.y + rect.height {
             let mut d_idx = y as usize * self.width as usize + rect.x as usize;
@@ -69,6 +70,7 @@ impl CanvasUtils {
     }
 
     fn flush(&mut self) -> Result<()> {
+        println!("Flushing...");
         self.window
             .update_with_buffer(&self.video, self.width as usize, self.height as usize)
             .with_context(|| "Unable to update screen buffer")?;
@@ -76,7 +78,7 @@ impl CanvasUtils {
     }
 
     fn copy(&mut self, dst: Rect, src: Rect) -> Result<()> {
-        println!("Copy");
+        println!("Copying...");
         let mut tmp = vec![0; src.width as usize * src.height as usize];
         let mut tmp_idx = 0;
         for y in 0..src.height as usize {

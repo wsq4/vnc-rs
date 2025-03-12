@@ -4,6 +4,8 @@ use super::{
 };
 use std::future::Future;
 use std::pin::Pin;
+use rustls::pki_types::{CertificateDer, TrustAnchor};
+use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tracing::{info, trace};
 
@@ -128,7 +130,7 @@ where
                             SecurityType::write(&SecurityType::VeNCrypt, &mut connector.stream).await?;
                             
                             let mut auth = VeNCAuthHelper::new(&mut connector.stream).await?;
-                            auth.tls_handshake(connector.stream, connector.sni_name.unwrap_or("localhost".to_string())).await?;
+                            auth.tls_handshake(connector.stream, connector.sni_name.unwrap_or("localhost".to_string()), connector.custom_root_store).await?;
 
                             let credential = (connector.auth_methond.take().unwrap()).await?;
 
@@ -194,6 +196,7 @@ where
     pixel_format: Option<PixelFormat>,
     encodings: Vec<VncEncoding>,
     sni_name: Option<String>,
+    custom_root_store: RootCertStore,
 }
 
 impl<S, F> VncConnector<S, F>
@@ -213,7 +216,7 @@ where
     /// async fn main() -> Result<(), VncError> {
     ///     let tcp = TcpStream::connect("127.0.0.1:5900").await?;
     ///     let vnc = VncConnector::new(tcp)
-    ///         .set_auth_method(async move { Ok("password".to_string()) })
+    ///         .set_auth_method(async move { Ok(vec!["password".to_string()]) })
     ///         .add_encoding(vnc::VncEncoding::Tight)
     ///         .add_encoding(vnc::VncEncoding::Zrle)
     ///         .add_encoding(vnc::VncEncoding::CopyRect)
@@ -237,6 +240,7 @@ where
             pixel_format: None,
             encodings: Vec::new(),
             sni_name: None,
+            custom_root_store: RootCertStore::empty(),
         }
     }
 
@@ -342,6 +346,15 @@ where
     /// 
     pub fn set_sni_name(mut self, sni_name: String) -> Self {
         self.sni_name = Some(sni_name);
+        self
+    }
+
+    /// Custom root store that we want to use
+    /// 
+    /// This is only used when the server supports VeNCrypt
+    /// 
+    pub fn add_root_store(mut self, der: CertificateDer) -> Self {
+        self.custom_root_store.add(der).unwrap();
         self
     }
 

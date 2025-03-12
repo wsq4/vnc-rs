@@ -29,6 +29,8 @@ pub enum VncError {
     General(String),
     #[error("Unsupported VeNCrypt version")]
     UnsupportedVeNCryptVersion,
+    #[error("TLS handshake error with message: {0}")]
+    TlsHandshakeError(String),
 }
 
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for VncError {

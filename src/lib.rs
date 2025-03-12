@@ -3,7 +3,7 @@
 //! ## Description
 //! + An async implementation of VNC client side protocol
 //!
-//! ## Simple example
+//! ## Simple display
 //!
 //! ```no_run
 //! use anyhow::{Context, Result};
@@ -28,7 +28,7 @@
 //!
 //!     let tcp = TcpStream::connect("127.0.0.1:5900").await?;
 //!     let vnc = VncConnector::new(tcp)
-//!         .set_auth_method(async move { Ok("123".to_string()) })
+//!         .set_auth_method(async move { Ok(vec!["123".to_string()]) })
 //!         .add_encoding(vnc::VncEncoding::Tight)
 //!         .add_encoding(vnc::VncEncoding::Zrle)
 //!         .add_encoding(vnc::VncEncoding::CopyRect)

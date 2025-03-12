@@ -1,7 +1,9 @@
 use std::fs;
-use std::io::{BufReader, Read};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read};
 use anyhow::{Context, Result};
 use minifb::{Window, WindowOptions};
+use png::{BitDepth, ColorType, Encoder};
 use rustls_pki_types::{CertificateDer, TrustAnchor};
 use rustls_pki_types::pem::PemObject;
 use tokio::{self, net::TcpStream};
@@ -12,7 +14,6 @@ use vnc::{PixelFormat, Rect, VncConnector, VncEvent, X11Event, ClientMouseEvent,
 use webpki::{anchor_from_trusted_cert, EndEntityCert};
 
 struct CanvasUtils {
-    window: Window,
     video: Vec<u32>,
     width: u32,
     height: u32,
@@ -21,13 +22,6 @@ struct CanvasUtils {
 impl CanvasUtils {
     fn new() -> Result<Self> {
         Ok(Self {
-            window: Window::new(
-                "mstsc-rs Remote Desktop in Rust",
-                800_usize,
-                600_usize,
-                WindowOptions::default(),
-            )
-            .with_context(|| "Unable to create window".to_string())?,
             video: vec![],
             width: 800,
             height: 600,
@@ -35,15 +29,16 @@ impl CanvasUtils {
     }
 
     fn init(&mut self, width: u32, height: u32) -> Result<()> {
-        let mut window = Window::new(
-            "mstsc-rs Remote Desktop in Rust",
-            width as usize,
-            height as usize,
-            WindowOptions::default(),
-        )
-        .with_context(|| "Unable to create window")?;
-        window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
-        self.window = window;
+        println!("Initializing window");
+        // let mut window = Window::new(
+        //     "mstsc-rs Remote Desktop in Rust",
+        //     width as usize,
+        //     height as usize,
+        //     WindowOptions::default(),
+        // )
+        //     .with_context(|| "Unable to create window")?;
+        // window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+        // self.window = window;
         self.width = width;
         self.height = height;
         self.video.resize(height as usize * width as usize, 0);
@@ -53,7 +48,7 @@ impl CanvasUtils {
     fn draw(&mut self, rect: Rect, data: Vec<u8>) -> Result<()> {
         // since we set the PixelFormat as bgra
         // the pixels must be sent in [blue, green, red, alpha] in the network order
-
+        println!("Drawing");
         let mut s_idx = 0;
         for y in rect.y..rect.y + rect.height {
             let mut d_idx = y as usize * self.width as usize + rect.x as usize;
@@ -69,14 +64,15 @@ impl CanvasUtils {
     }
 
     fn flush(&mut self) -> Result<()> {
-        self.window
-            .update_with_buffer(&self.video, self.width as usize, self.height as usize)
-            .with_context(|| "Unable to update screen buffer")?;
+        println!("Flushing...");
+        // self.window
+        //     .update_with_buffer(&self.video, self.width as usize, self.height as usize)
+        //     .with_context(|| "Unable to update screen buffer")?;
         Ok(())
     }
 
     fn copy(&mut self, dst: Rect, src: Rect) -> Result<()> {
-        println!("Copy");
+        println!("Copying...");
         let mut tmp = vec![0; src.width as usize * src.height as usize];
         let mut tmp_idx = 0;
         for y in 0..src.height as usize {
@@ -130,6 +126,36 @@ impl CanvasUtils {
             }
             _ => tracing::error!("{:?}", event),
         }
+        Ok(())
+    }
+
+    fn save(&mut self) -> Result<()> {
+
+        let mut raw_data: Vec<u8> = Vec::with_capacity((self.width * self.height * 3) as usize);
+        for pixel in &self.video {
+            // Extract the channels; we assume our pixel is in 0xRRGGBB format.
+            let r = ((pixel >> 16) & 0xFF) as u8;
+            let g = ((pixel >> 8) & 0xFF) as u8;
+            let b = (pixel & 0xFF) as u8;
+            raw_data.extend_from_slice(&[r, g, b]);
+        }
+
+        // Create the output file and a buffered writer.
+        let file = File::create("output.png")?;
+        let ref mut w = BufWriter::new(file);
+
+        // Initialize the PNG encoder.
+        let mut encoder = Encoder::new(w, self.width, self.height);
+        encoder.set_color(ColorType::Rgb);
+        encoder.set_depth(BitDepth::Eight);
+
+        // Write the header.
+        let mut writer = encoder.write_header()?;
+
+        // Write the image data and finish.
+        writer.write_image_data(&raw_data)?;
+        println!("Saved image as output.png");
+
         Ok(())
     }
 }
@@ -202,6 +228,10 @@ EtUYbAPGtuVelmg1bYnf3KOXtJNEza67e/gVLxjDXAukIyJLXWD4x+TdkA==
 
     let mut now = std::time::Instant::now();
 
+    let mut cnt = 0;
+
+
+
     loop {
         match vnc.poll_event().await {
             Ok(Some(e)) => {
@@ -214,12 +244,17 @@ EtUYbAPGtuVelmg1bYnf3KOXtJNEza67e/gVLxjDXAukIyJLXWD4x+TdkA==
             }
         }
         if now.elapsed().as_millis() > 16 {
-            let _ = canvas.flush();
+            // let _ = canvas.flush();
             let _ = vnc.input(X11Event::Refresh).await;
             now = std::time::Instant::now();
+            cnt += 1;
+            if cnt > 200 {
+                break;
+            }
         }
     }
     canvas.close();
+    let _ = canvas.save();
     let _ = vnc.close().await;
     Ok(())
 }
